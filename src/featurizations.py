@@ -2,6 +2,7 @@ import rdkit
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 from rdkit.Chem.EState.Fingerprinter import FingerprintMol
+from rdkit.Chem.EState import AtomTypes
 from collections import Counter
 import pandas as pd
 import collections
@@ -58,7 +59,7 @@ GROUPS_LAYERED = {
     }
 }
 
-def load(smi):
+def load_smi(smi):
     """Parse SMILES and convert N(=O)=O nitro groups to [N+](=O)[O-]."""
     m = Chem.MolFromSmiles(smi, sanitize=False)   # sanitize=False so 5-bond N doesn't error out
     m = Chem.RWMol(m)
@@ -87,29 +88,7 @@ def atom_counts(m):
         counts[symbol] += 1
     return counts
 
-def sum_over_bonds(m):
-    bonds = m.GetBonds()
-
-    bond_counts = {bond_type: 0 for bond_type in BOND_SYMBOL}
-
-    for bond in bonds:
-        bond_type = bond.GetBondType()
-        bond_counts[bond_type] += 1
-
-    counts_vec = list(bond_counts.values())
-    return counts_vec
-
-def oxygen_balance_100(m):
-    n_atoms = m.GetNumAtoms(onlyExplicit=False)
-    n_heavy = m.GetNumAtoms()
-    n_H = n_atoms-n_heavy
-
-    atomic_counts = atom_counts(m)
-
-    OB = (100 / n_atoms) * (atomic_counts['O']  - 2*atomic_counts['C'] - atomic_counts['H']/2)
-    return [OB]
-
-def group_count(m, debug=False):
+def __group_count__(m, debug=False):
     group_counts = {group_name: 0 for group_name in SIGNATURES}
 
     for i, atom in enumerate(m.GetAtoms()):
@@ -133,23 +112,46 @@ def group_count(m, debug=False):
     
     return group_counts
 
-def elton_descriptor_set(m, debug=True):
-    ob_100 = oxygen_balance_100(m)[0]
+def feat_sum_over_bonds(df):
+    print(type(df))
+    mols = df['mol']
+    rows = []
 
-    atomic_counts = atom_counts(m)
-    group_counts = group_count(m)
+    for m in mols:
+        bonds = m.GetBonds()
 
-    n_C = atomic_counts['C']
-    n_N = atomic_counts['N']
-    n_O = atomic_counts['O']
-    n_F = atomic_counts['F']
-    n_H = atomic_counts['H']
+        bond_counts = {bond_type: 0 for bond_type in BOND_SYMBOL}
 
-    if n_C == 0:
-        nNnC_ratio = n_N/0.00001
-    else:
-        nNnC_ratio = n_N/n_C
+        for bond in bonds:
+            bond_type = bond.GetBondType()
+            bond_counts[bond_type] += 1
 
+        counts_vec = list(bond_counts.values())
+
+        rows.append(counts_vec)
+
+    X_SOB = pd.DataFrame(rows, columns=[bond_type for bond_type in BOND_SYMBOL], index=mols.index)
+    return X_SOB
+
+def feat_oxygen_balance_100(df):
+    mols = df['mol']
+    rows = []
+
+    for m in mols:
+        n_atoms = m.GetNumAtoms(onlyExplicit=False)
+        n_heavy = m.GetNumAtoms()
+        n_H = n_atoms-n_heavy
+        atomic_counts = atom_counts(m)
+
+        OB = (100 / n_atoms) * (atomic_counts['O']  - 2*atomic_counts['C'] - atomic_counts['H']/2)
+        rows.append([OB])
+    
+    X_OB = pd.DataFrame(rows, columns=['ob_100'], index=mols.index)
+    return X_OB
+
+def group_count_reader(m):
+    group_counts = __group_count__(m)
+    
     n_NNO2 = group_counts['NNO2']
     n_CNO2 = group_counts['CNO2']
     n_ONO2 = group_counts['ONO2']
@@ -167,68 +169,93 @@ def elton_descriptor_set(m, debug=True):
     n_NOC = group_counts['NOC']
     n_CO = group_counts['CO']
 
-    if debug:
-        print(group_counts)
+    return n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_NO, n_COH, n_NOC, n_CO
 
-    x_CDS = [ob_100, nNnC_ratio, n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_C, n_N, n_NO, n_COH, n_NOC, n_CO, n_H, n_F]
+def feat_elton_descriptor_set(df):
+    mols = df['mol']
+    rows = []
+
+    df_ob = ob_100 = feat_oxygen_balance_100(df)
+
+    for m in mols:
+        # Oxygen balance
+        
+        # Atom counts
+        atomic_counts = atom_counts(m)
+        n_C = atomic_counts['C']
+        n_N = atomic_counts['N']
+        n_O = atomic_counts['O']
+        n_F = atomic_counts['F']
+        n_H = atomic_counts['H']
+
+        # Ratio
+        if n_C == 0:
+            nNnC_ratio = n_N/0.00001
+        else:
+            nNnC_ratio = n_N/n_C
+
+        # Functional group counts
+        n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_NO, n_COH, n_NOC, n_CO = group_count_reader(m)
     
-    return x_CDS
+        x_CDS = [ob_100, nNnC_ratio, n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_C, n_N, n_NO, n_COH, n_NOC, n_CO, n_H, n_F]
+        rows.append(x_CDS)
 
-def estate_counts(m):
-    # For sanity:
-    #estate_names = [atom_name for atom_name in rdkit.Chem.EState.Fingerprinter.GetAtomEStateNames()]
-    #rdkit.Chem.EState.AtomTypes.BuildPatts()
-    
-    m = Chem.RemoveHs(m) 
-    counts, sums = FingerprintMol(m)
+    X_CDS = pd.DataFrame(rows, columns=['ob_100', 'nNnC_ratio', 'n_NNO2', 'n_CNO2', 'n_ONO2', 'n_ONO', 'n_CNO', 'n_CNN', 'n_NNN', 'n_CNH2', 'n_CNOC', 'n_CNF', 'n_CF', 'n_C', 'n_N', 'n_NO', 'n_COH', 'n_NOC', 'n_CO', 'n_H', 'n_F'], index=mols.index)
+    X_CDS = pd.concat([df_ob, X_CDS], axis=1)
+    return X_CDS
 
+def feat_estate_counts(df):
+    mols = df['mol']
+    rows = []
+
+    AtomTypes.TypeAtoms(Chem.MolFromSmiles("C")) 
     estate_names = [atom_name for atom_name, atom_pattern in rdkit.Chem.EState.AtomTypes.esPatterns]
     keep_indices = [i for i, name in enumerate(estate_names) if name.endswith((CNOF))]
 
-    cnof_counts = counts[keep_indices]
-    
-    return cnof_counts
+    for m in mols:
+        m = Chem.RemoveHs(m) 
+        counts, sums = FingerprintMol(m)
 
-def load_data_as_mols(data_path):
+        cnof_counts = counts[keep_indices]
+        rows.append(cnof_counts)
+
+    X_ES = pd.DataFrame(rows, columns=[estate_names[i] for i in keep_indices], index=mols.index)
+    return X_ES
+
+def load_data_with_mols(data_path):
     df = pd.read_excel(os.path.join(data_path, "Huang_Massa_data_with_all_SMILES.xlsx")).drop(index = [109])
     df = df.sort_values(by='num').reset_index(drop=True)
-    mols = [load(s) for s in df["SMILES"]]
 
-    return tuple(mols), df
+    df['mol'] = df['SMILES'].apply(load_smi)
+    #mols = [load_smi(s) for s in df["SMILES"]]
+
+    return df
 
 def construct_dataset(data_path, featurization_scheme={}):
+    df = load_data_with_mols(data_path)
+
     featurized_data = pd.DataFrame()
-    mols, df = load_data_as_mols(data_path)
 
-    print(Chem.MolToSmiles(mols[108]))
-
-    #featurized_data = pd.DataFrame([elton_descriptor_set(m) for m in mols if m is not None])
-    #featurized_data.columns = ["OB_100", "nNnC_ratio", "n_NNO2", "n_CNO2", "n_ONO2", "n_ONO", "n_CNO", "n_CNN", "n_NNN", "n_CNH2", "n_CNOC", "n_CNF", "n_CF", "n_C", "n_N", "n_NO", "n_COH", "n_NOC", "n_CO", "n_H", "n_F"]
+    print(feat_oxygen_balance_100(df))
+    print(feat_sum_over_bonds(df))
+    print(feat_elton_descriptor_set(df))
+    print(feat_estate_counts(df))
 
     if featurization_scheme.get("CDS", True):
-        cds_df = elton_descriptor_set(m)
+        cds_data = feat_elton_descriptor_set(df)
+        featurized_data = pd.concat([featurized_data, cds_data], axis=1)
+    if featurization_scheme.get("BoB", True):
+        es_data = feat_estate_counts(df)
+        featurized_data = pd.concat([featurized_data, es_data], axis=1)
 
-    return featurized_data, df
+
+    return featurized_data
 
 def __main__():
     data_path = os.path.abspath("/scratch/leebrian/elton/Machine-Learning-Energetic-Molecules-Notebooks/datasets/")
-    construct_dataset(data_path)
+    feat = construct_dataset(data_path)
+    print(feat)
 
-    #mols: list of rdkit.Chem.rdchem.Mol objects
-
-    for m in mols:
-        print("MOLECULE: ", Chem.MolToSmiles(m))
-        ob = oxygen_balance_100(m)
-        bs = sum_over_bonds(m)
-        estate_fp = estate_counts(m)
-        cds = elton_descriptor_set(m, debug=True)
-        
-        print("O balance: ", ob)
-        print("Sum of bonds: ", bs)
-        print("Estate counts: ", estate_fp, len(estate_fp))
-        print("Custom descriptor set: ", cds, len(cds))
 
 if __name__ == "__main__":
-    #X_sob = pd.DataFrame([sum_over_bonds(m) for m in mols if m is not None])
-    #X_sob = X_sob.fillna(0).astype(int)   # columns = bond types
     __main__()
