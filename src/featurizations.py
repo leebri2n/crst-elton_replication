@@ -119,7 +119,6 @@ def feat_sum_over_bonds(df):
 
     for m in mols:
         bonds = m.GetBonds()
-
         bond_counts = {bond_type: 0 for bond_type in BOND_SYMBOL}
 
         for bond in bonds:
@@ -127,10 +126,9 @@ def feat_sum_over_bonds(df):
             bond_counts[bond_type] += 1
 
         counts_vec = list(bond_counts.values())
-
         rows.append(counts_vec)
 
-    X_SOB = pd.DataFrame(rows, columns=[bond_type for bond_type in BOND_SYMBOL], index=mols.index)
+    X_SOB = pd.DataFrame(rows, columns=[BOND_SYMBOL.values()], index=mols.index)
     return X_SOB
 
 def feat_oxygen_balance_100(df):
@@ -175,7 +173,7 @@ def feat_elton_descriptor_set(df):
     mols = df['mol']
     rows = []
 
-    df_ob = ob_100 = feat_oxygen_balance_100(df)
+    df_ob = feat_oxygen_balance_100(df)
 
     for m in mols:
         # Oxygen balance
@@ -197,10 +195,10 @@ def feat_elton_descriptor_set(df):
         # Functional group counts
         n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_NO, n_COH, n_NOC, n_CO = group_count_reader(m)
     
-        x_CDS = [ob_100, nNnC_ratio, n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_C, n_N, n_NO, n_COH, n_NOC, n_CO, n_H, n_F]
+        x_CDS = [nNnC_ratio, n_NNO2, n_CNO2, n_ONO2, n_ONO, n_CNO, n_CNN, n_NNN, n_CNH2, n_CNOC, n_CNF, n_CF, n_C, n_N, n_NO, n_COH, n_NOC, n_CO, n_H, n_F]
         rows.append(x_CDS)
 
-    X_CDS = pd.DataFrame(rows, columns=['ob_100', 'nNnC_ratio', 'n_NNO2', 'n_CNO2', 'n_ONO2', 'n_ONO', 'n_CNO', 'n_CNN', 'n_NNN', 'n_CNH2', 'n_CNOC', 'n_CNF', 'n_CF', 'n_C', 'n_N', 'n_NO', 'n_COH', 'n_NOC', 'n_CO', 'n_H', 'n_F'], index=mols.index)
+    X_CDS = pd.DataFrame(rows, columns=['nNnC_ratio', 'n_NNO2', 'n_CNO2', 'n_ONO2', 'n_ONO', 'n_CNO', 'n_CNN', 'n_NNN', 'n_CNH2', 'n_CNOC', 'n_CNF', 'n_CF', 'n_C', 'n_N', 'n_NO', 'n_COH', 'n_NOC', 'n_CO', 'n_H', 'n_F'], index=mols.index)
     X_CDS = pd.concat([df_ob, X_CDS], axis=1)
     return X_CDS
 
@@ -222,8 +220,8 @@ def feat_estate_counts(df):
     X_ES = pd.DataFrame(rows, columns=[estate_names[i] for i in keep_indices], index=mols.index)
     return X_ES
 
-def load_data_with_mols(data_path):
-    df = pd.read_excel(os.path.join(data_path, "Huang_Massa_data_with_all_SMILES.xlsx")).drop(index = [109])
+def load_data_with_mols(datafile_path):
+    df = pd.read_excel(datafile_path).drop(index = [109])
     df = df.sort_values(by='num').reset_index(drop=True)
 
     df['mol'] = df['SMILES'].apply(load_smi)
@@ -231,7 +229,9 @@ def load_data_with_mols(data_path):
 
     return df
 
-def construct_dataset(data_path, featurization_scheme={}):
+def construct_dataset(data_path, filename, featurization_scheme={}, save=True):
+    featurization_string = ""
+    datafile_path = os.path.join(data_path, filename)
     df = load_data_with_mols(data_path)
 
     featurized_data = pd.DataFrame()
@@ -242,18 +242,24 @@ def construct_dataset(data_path, featurization_scheme={}):
     print(feat_estate_counts(df))
 
     if featurization_scheme.get("CDS", True):
+        featurization_string=featurization_string+"CDS"
         cds_data = feat_elton_descriptor_set(df)
         featurized_data = pd.concat([featurized_data, cds_data], axis=1)
-    if featurization_scheme.get("BoB", True):
+    if featurization_scheme.get("ES", True):
         es_data = feat_estate_counts(df)
         featurized_data = pd.concat([featurized_data, es_data], axis=1)
+    if featurization_scheme.get("SoB", True):
+        sob_data = feat_sum_over_bonds(df)
+        featurized_data = pd.concat([featurized_data, sob_data], axis=1)
 
+    if save:
+        featurized_data.to_csv(os.path.join(data_path, f"repfeat-{filename}_{featurization_string}.csv"))
 
     return featurized_data
 
 def __main__():
     data_path = os.path.abspath("/scratch/leebrian/elton/Machine-Learning-Energetic-Molecules-Notebooks/datasets/")
-    feat = construct_dataset(data_path)
+    feat = construct_dataset(data_path, filename="Huang_Massa_data_with_all_SMILES.xlsx", save=True)
     print(feat)
 
 
