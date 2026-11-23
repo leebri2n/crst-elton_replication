@@ -1,0 +1,11 @@
+# environment.yml
+name: elton_2018
+channels:
+    - conda-forge
+    - https://conda.ccdc.cam.ac.uk
+dependencies:
+    - python==3.10.8
+    - scikit-learn
+    - rdkit
+    - openbabel
+    - csd-python-api
